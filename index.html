@@ -170,8 +170,8 @@ function conf(){
 function summary(){
  const next=data.hours.slice(data.cur,data.cur+24),mx=next.reduce((a,b)=>b.prob>a.prob?b:a);
  const tot=next.reduce((a,h)=>a+h.rain,0);
- if(mx.prob>=.5){const h=+mx.time.slice(11,13),ap=h>=12?'PM':'AM';return `Rain is likely around ${h%12||12} ${ap} — ${Math.round(mx.prob*100)}% of models agree, about ${tot.toFixed(1)} mm in the next 24 hours.`}
- if(mx.prob>=.25)return `A chance of rain today — ${Math.round(mx.prob*100)}% of models show it, so it is worth keeping an umbrella close.`;
+ if(mx.prob>=.5){const h=+mx.time.slice(11,13),ap=h>=12?'PM':'AM',dd=mx.time.slice(0,10)===data.hours[data.cur].time.slice(0,10)?'today':'tomorrow';return `Rain is likely ${dd} around ${h%12||12} ${ap} — ${Math.round(mx.prob*100)}% of models agree, about ${tot.toFixed(1)} mm in the next 24 hours.`}
+ if(mx.prob>=.25)return `A chance of rain in the next 24 hours — ${Math.round(mx.prob*100)}% of models show it, so it is worth keeping an umbrella close.`;
  return `Dry for the next 24 hours. ${Math.round(next[0].prob*100)}% of models show rain right now.`;
 }
 
