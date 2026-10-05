@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Consensus Weather</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#16314f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+:root{--g1:#2b6cb0;--g2:#16314f;--glass:rgba(255,255,255,.16);--tx:#fff;--dim:rgba(255,255,255,.7)}
+*{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+html,body{min-height:100%}
+body{font-family:-apple-system,"SF Pro Display","Segoe UI",Roboto,"Helvetica Neue",sans-serif;color:var(--tx);background:linear-gradient(180deg,var(--g1),var(--g2)) fixed;transition:background .6s;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+body.clear{--g1:#3a8fe0;--g2:#1c4f8f}body.night{--g1:#0f1c3a;--g2:#050913}
+body.cloud{--g1:#6b7f95;--g2:#37465a}body.rain{--g1:#4a5b70;--g2:#1f2a38}body.storm{--g1:#3a3550;--g2:#14121f}body.fog{--g1:#8a96a3;--g2:#515c68}
+main{max-width:520px;margin:0 auto;padding:14px 16px 40px}
+.bar{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.bar input{flex:1;background:var(--glass);border:0;border-radius:12px;padding:10px 14px;color:#fff;font-size:15px;outline:none}
+.bar input::placeholder{color:var(--dim)}
+.bar button{background:var(--glass);border:0;color:#fff;border-radius:12px;padding:10px 13px;font-size:15px;cursor:pointer}
+.bar button:focus-visible,input:focus-visible{outline:2px solid #fff}
+#res{background:rgba(20,30,45,.92);border-radius:12px;margin-bottom:8px;overflow:hidden}
+#res div{padding:11px 14px;font-size:14px;border-bottom:1px solid rgba(255,255,255,.08);cursor:pointer}
+.hero{text-align:center;padding:26px 0 18px}
+.hero h1{font-size:25px;font-weight:500}
+.hero .t{font-size:104px;font-weight:200;line-height:1;margin:4px 0 0 14px;letter-spacing:-4px}
+.hero .c{font-size:19px;font-weight:500}
+.hero .hl{font-size:16px;color:var(--dim);margin-top:4px}
+.sum{background:var(--glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-radius:18px;padding:13px 15px;margin-bottom:12px;font-size:15px;line-height:1.4}
+.card{background:var(--glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-radius:18px;padding:12px 15px;margin-bottom:12px}
+.card h2{font-size:13px;font-weight:500;color:var(--dim);margin-bottom:10px}
+.hours{display:flex;overflow-x:auto;gap:18px;padding-bottom:4px;scrollbar-width:none}
+.hours::-webkit-scrollbar{display:none}
+.h{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:44px;font-size:14px}
+.h small{font-size:12px;color:var(--dim)}.h .p{font-size:11px;color:#8fd3ff;height:13px}.h .i{font-size:22px}
+.d{display:grid;grid-template-columns:62px 38px 34px 40px 1fr 40px;align-items:center;gap:6px;padding:9px 0;font-size:16px;border-top:1px solid rgba(255,255,255,.1)}
+.d:first-of-type{border-top:0}
+.d .i{font-size:22px;text-align:center}.d .p{font-size:12px;color:#8fd3ff}.d .lo{color:var(--dim);text-align:right}
+.rg{height:5px;border-radius:3px;background:rgba(255,255,255,.18);position:relative}
+.rg i{position:absolute;top:0;bottom:0;border-radius:3px;background:linear-gradient(90deg,#7dd3fc,#fde68a,#fb923c)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid .card{margin:0}.grid b{font-size:28px;font-weight:300;display:block}.grid span{font-size:13px;color:var(--dim)}
+.conf{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.foot{font-size:12px;color:var(--dim);text-align:center;margin-top:16px;line-height:1.5}
+#err{text-align:center;padding:60px 20px;color:var(--dim)}
+</style></head><body class="clear">
+<main>
+<div class="bar"><input id="q" placeholder="Search city" aria-label="Search city" enterkeyhint="search"><button id="home" aria-label="Home">🏠</button><button id="loc" aria-label="Use my location">📍</button><button id="u" aria-label="Switch units">°C</button></div>
+<div id="res" hidden></div>
+<div id="app"><div id="err">Finding your forecast…</div></div>
+</main>
+<script>
+const MODELS=['ecmwf_ifs025','gfs_seamless','icon_seamless','gem_seamless','meteofrance_seamless','ukmo_seamless','jma_seamless'];
+const ALL=MODELS.concat(['ecmwf_aifs025_single','cma_grapes_global','bom_access_global']);
+const VARS=['temperature_2m','apparent_temperature','relative_humidity_2m','precipitation','wind_speed_10m','weather_code'];
+const $=s=>document.querySelector(s);
+const HOME={lat:12.969871,lon:80.135271,name:'Pammal, Chennai'};
+let place=JSON.parse(localStorage.getItem('place3')||'null')||HOME;
+let unit=localStorage.getItem('unit')||'C',data=null;
+const avg=a=>a.reduce((x,y)=>x+y,0)/a.length;
+const sd=a=>{if(a.length<2)return 0;const m=avg(a);return Math.sqrt(avg(a.map(x=>(x-m)**2)))};
+const mode=a=>{const c={};a.forEach(x=>c[x]=(c[x]||0)+1);return +Object.keys(c).sort((x,y)=>c[y]-c[x])[0]};
+const T=c=>Math.round(unit==='F'?c*9/5+32:c);
+const W=k=>unit==='F'?Math.round(k*.621)+' mph':Math.round(k)+' km/h';
+
+function wx(c,day){
+ if(c===0)return day?['☀️','Clear','clear']:['🌙','Clear','night'];
+ if(c<=2)return day?['🌤️','Partly cloudy','clear']:['☁️','Partly cloudy','night'];
+ if(c===3)return['☁️','Overcast','cloud'];
+ if(c<=48)return['🌫️','Fog','fog'];
+ if(c<=57)return['🌦️','Drizzle','rain'];
+ if(c<=67)return['🌧️','Rain','rain'];
+ if(c<=77)return['🌨️','Snow','rain'];
+ if(c<=82)return['🌦️','Showers','rain'];
+ if(c<=86)return['🌨️','Snow showers','rain'];
+ return['⛈️','Thunderstorm','storm'];
+}
+const isDay=t=>{const h=+t.slice(11,13);return h>=6&&h<18};
+
+const SIG=()=>({signal:AbortSignal.timeout(6000)});
+async function metno(off){
+ const j=await(await fetch(`https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${place.lat.toFixed(4)}&lon=${place.lon.toFixed(4)}`,SIG())).json();
+ const m=new Map();
+ j.properties.timeseries.forEach(s=>{const o=s.data.next_1_hours;if(!o)return;
+  const k=new Date(Date.parse(s.time)+off*1000).toISOString().slice(0,13),d=s.data.instant.details;
+  m.set(k,{t:d.air_temperature,h:d.relative_humidity,w:d.wind_speed*3.6,r:o.details.precipitation_amount})});
+ if(!m.size)throw 0;return m}
+async function wttr(){
+ const j=await(await fetch(`https://wttr.in/${place.lat.toFixed(4)},${place.lon.toFixed(4)}?format=j1`,SIG())).json();
+ const m=new Map();
+ j.weather.forEach(d=>d.hourly.forEach(h=>{const hh=String(Math.round(+h.time/100)).padStart(2,'0');
+  m.set(`${d.date}T${hh}`,{t:+h.tempC,h:+h.humidity,w:+h.windspeedKmph,r:+h.precipMM/3})}));
+ if(!m.size)throw 0;return m}
+async function load(){
+ $('#app').innerHTML='<div id="err">Checking every source…</div>';
+ const url=l=>`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}&hourly=${VARS.join()}&models=${l.join()}&forecast_days=10&timezone=auto`;
+ const om=async l=>{const r=await fetch(url(l));if(!r.ok)throw 0;return[await r.json(),l]};
+ try{
+  const[d,l]=await om(ALL).catch(()=>om(MODELS));
+  const ex=(await Promise.allSettled([metno(d.utc_offset_seconds),wttr()])).filter(r=>r.status==='fulfilled').map(r=>r.value);
+  data=process(d,ex,l);
+  localStorage.setItem('cache',JSON.stringify({place,data,at:Date.now()}));
+  render();
+ }catch(e){
+  const c=JSON.parse(localStorage.getItem('cache')||'null');
+  if(c){data=c.data;render('Offline — showing last update');}
+  else $('#app').innerHTML='<div id="err">Could not load the forecast. Check your connection and tap 📍 to retry.</div>';
+ }
+}
+
+function process(d,ex,list){
+ const H=d.hourly,n=H.time.length;
+ const ms=list.filter(m=>H['temperature_2m_'+m]&&H['temperature_2m_'+m].some(x=>x!=null));
+ const v=(k,i)=>ms.map(m=>H[k+'_'+m]?.[i]).filter(x=>x!=null);
+ const hours=[];
+ for(let i=0;i<n;i++){
+  const e=ex.map(m=>m.get(H.time[i].slice(0,13))).filter(Boolean);
+  const t=v('temperature_2m',i).concat(e.map(x=>x.t));if(!t.length)continue;
+  const pr=v('precipitation',i).concat(e.map(x=>x.r)),cd=v('weather_code',i);
+  const hu=v('relative_humidity_2m',i).concat(e.map(x=>x.h)),wd=v('wind_speed_10m',i).concat(e.map(x=>x.w)),fl=v('apparent_temperature',i);
+  hours.push({time:H.time[i],temp:avg(t),spread:sd(t),feels:fl.length?avg(fl):avg(t),hum:avg(hu),wind:avg(wd),
+   rain:pr.length?avg(pr):0,prob:pr.length?pr.filter(x=>x>=.1).length/pr.length:0,code:cd.length?mode(cd):0,n:t.length});
+ }
+ const days={};
+ hours.forEach((h,idx)=>{const k=h.time.slice(0,10);(days[k]=days[k]||[]).push(idx)});
+ const daily=Object.entries(days).map(([date,ix])=>{
+  const hs=ix.map(i=>hours[i]);
+  const per=ms.map(m=>{const s=ix.map(i=>H['precipitation_'+m]?.[i]).filter(x=>x!=null);return s.length?s.reduce((a,b)=>a+b,0):null}).filter(x=>x!=null);
+  const day=hs.filter(h=>+h.time.slice(11,13)>=7&&+h.time.slice(11,13)<=19);
+  return{date,max:Math.max(...hs.map(h=>h.temp)),min:Math.min(...hs.map(h=>h.temp)),
+   prob:per.length?per.filter(x=>x>=1).length/per.length:0,rain:per.length?avg(per):0,code:mode((day.length?day:hs).map(h=>h.code)),spread:avg(hs.map(h=>h.spread))};
+ });
+ const nowKey=new Date(Date.now()+d.utc_offset_seconds*1000).toISOString().slice(0,13);
+ let cur=hours.findIndex(h=>h.time.slice(0,13)>=nowKey);if(cur<0)cur=0;
+ return{hours,daily,cur,models:ms.length+ex.length,tz:d.timezone};
+}
+
+function conf(){
+ const s=avg(data.hours.slice(data.cur,data.cur+48).map(h=>h.spread));
+ return s<1.2?['#4ade80','High agreement']:s<2.5?['#facc15','Moderate agreement']:['#fb923c','Models disagree'];
+}
+
+function summary(){
+ const next=data.hours.slice(data.cur,data.cur+24),mx=next.reduce((a,b)=>b.prob>a.prob?b:a);
+ const tot=next.reduce((a,h)=>a+h.rain,0);
+ if(mx.prob>=.5){const h=+mx.time.slice(11,13),ap=h>=12?'PM':'AM';return `Rain is likely around ${h%12||12} ${ap} — ${Math.round(mx.prob*100)}% of models agree, about ${tot.toFixed(1)} mm in the next 24 hours.`}
+ if(mx.prob>=.25)return `A chance of rain today — ${Math.round(mx.prob*100)}% of models show it, so it is worth keeping an umbrella close.`;
+ return `Dry for the next 24 hours. ${Math.round(next[0].prob*100)}% of models show rain right now.`;
+}
+
+function render(note){
+ const{hours,daily,cur,models}=data,c=hours[cur],day=isDay(c.time),[ic,lab,cls]=wx(c.code,day);
+ document.body.className=cls;
+ document.querySelector('meta[name=theme-color]').content=getComputedStyle(document.body).getPropertyValue('--g2').trim()||'#16314f';
+ const [cc,cl]=conf(),gmin=Math.min(...daily.map(d=>d.min)),gmax=Math.max(...daily.map(d=>d.max));
+ const nx=hours.slice(cur,cur+24).map((h,i)=>{
+  const [e]=wx(h.code,isDay(h.time)),hr=+h.time.slice(11,13);
+  return `<div class="h"><small>${i?(hr%12||12)+(hr>=12?' PM':' AM'):'Now'}</small><span class="i">${e}</span><span class="p">${h.prob>=.2?Math.round(h.prob*100)+'%':''}</span><span>${T(h.temp)}°</span></div>`}).join('');
+ const dl=daily.map((d,i)=>{
+  const [e]=wx(d.code,true),l=(d.min-gmin)/(gmax-gmin||1)*100,w=(d.max-d.min)/(gmax-gmin||1)*100;
+  const nm=i?new Date(d.date+'T12:00').toLocaleDateString('en',{weekday:'short'}):'Today';
+  return `<div class="d"><span>${nm}</span><span class="i">${e}</span><span class="p">${d.prob>=.2?Math.round(d.prob*100)+'%':''}</span><span class="lo">${T(d.min)}°</span><div class="rg"><i style="left:${l}%;width:${Math.max(w,6)}%"></i></div><span>${T(d.max)}°</span></div>`}).join('');
+ const rain24=hours.slice(cur,cur+24).reduce((a,h)=>a+h.rain,0);
+ $('#app').innerHTML=`
+ <div class="hero"><h1>${place.name}</h1><div class="t">${T(c.temp)}°</div><div class="c">${ic} ${lab}</div>
+ <div class="hl">H:${T(daily[0].max)}°  L:${T(daily[0].min)}°  ·  Feels ${T(c.feels)}°</div></div>
+ <div class="sum">${summary()}</div>
+ <div class="card"><h2>Next 24 hours</h2><div class="hours">${nx}</div></div>
+ <div class="card"><h2>10-day forecast</h2>${dl}</div>
+ <div class="grid">
+  <div class="card"><h2>Humidity</h2><b>${Math.round(c.hum)}%</b></div>
+  <div class="card"><h2>Wind</h2><b>${W(c.wind)}</b></div>
+  <div class="card"><h2>Rain, next 24h</h2><b>${unit==='F'?(rain24/25.4).toFixed(2)+' in':rain24.toFixed(1)+' mm'}</b></div>
+  <div class="card"><h2>Confidence</h2><b style="font-size:18px;margin-top:6px"><i class="conf" style="background:${cc}"></i>${cl}</b><span>±${(avg(hours.slice(cur,cur+48).map(h=>h.spread))).toFixed(1)}° spread</span></div>
+ </div>
+ <div class="foot">${note?note+'<br>':''}Average of ${models} forecast sources: ECMWF, GFS, ICON, GEM, Météo-France, UK Met Office, JMA, MET Norway, WWO and more.<br>Rain % = share of models forecasting rain.</div>`;
+}
+
+$('#u').textContent='°'+unit;
+$('#u').onclick=()=>{unit=unit==='C'?'F':'C';localStorage.setItem('unit',unit);$('#u').textContent='°'+unit;data&&render()};
+$('#home').onclick=()=>{place=HOME;localStorage.setItem('place3',JSON.stringify(HOME));load()};
+$('#loc').onclick=()=>{
+ if(!navigator.geolocation)return load();
+ navigator.geolocation.getCurrentPosition(p=>{
+  place={lat:+p.coords.latitude.toFixed(3),lon:+p.coords.longitude.toFixed(3),name:'My location'};
+  localStorage.setItem('place3',JSON.stringify(place));
+  fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${place.lat},${place.lon}&count=1`).catch(()=>0);
+  load();
+ },()=>load(),{timeout:8000});
+};
+let tm;
+$('#q').addEventListener('input',e=>{
+ clearTimeout(tm);const v=e.target.value.trim(),r=$('#res');
+ if(v.length<2){r.hidden=true;return}
+ tm=setTimeout(async()=>{
+  try{
+   const j=await(await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(v)}&count=5`)).json();
+   r.innerHTML=(j.results||[]).map((x,i)=>`<div data-i="${i}">${x.name}${x.admin1?', '+x.admin1:''}, ${x.country||''}</div>`).join('')||'<div>No matches</div>';
+   r.hidden=false;
+   r.querySelectorAll('[data-i]').forEach(el=>el.onclick=()=>{
+    const x=j.results[el.dataset.i];
+    place={lat:x.latitude,lon:x.longitude,name:x.name};
+    localStorage.setItem('place3',JSON.stringify(place));
+    r.hidden=true;$('#q').value='';load();
+   });
+  }catch(e){}
+ },300);
+});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+load();
+</script></body></html>
