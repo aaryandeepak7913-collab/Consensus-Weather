@@ -44,10 +44,12 @@ main{max-width:520px;margin:0 auto;padding:14px 16px 40px}
 .conf{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
 .foot{font-size:12px;color:var(--dim);text-align:center;margin-top:16px;line-height:1.5}
 #err{text-align:center;padding:60px 20px;color:var(--dim)}
+#set{display:flex;flex-direction:column;gap:8px}#set input{background:rgba(255,255,255,.16);border:0;border-radius:10px;padding:10px;color:#fff;font-size:14px}#set input::placeholder{color:var(--dim)}#set button{background:#fff;color:#16314f;border:0;border-radius:10px;padding:10px;font-weight:600}a{color:#fff}
 </style></head><body class="clear">
 <main>
-<div class="bar"><input id="q" placeholder="Search city" aria-label="Search city" enterkeyhint="search"><button id="home" aria-label="Home">🏠</button><button id="loc" aria-label="Use my location">📍</button><button id="u" aria-label="Switch units">°C</button></div>
+<div class="bar"><input id="q" placeholder="Search city" aria-label="Search city" enterkeyhint="search"><button id="home" aria-label="Home">🏠</button><button id="loc" aria-label="Use my location">📍</button><button id="cfg" aria-label="Sources">⚙️</button><button id="u" aria-label="Switch units">°C</button></div>
 <div id="res" hidden></div>
+<div id="set" class="card" hidden><h2>Optional free API keys (saved on this phone only)</h2><input id="k1" placeholder="AccuWeather key" autocomplete="off"><input id="k2" placeholder="OpenWeatherMap key" autocomplete="off"><input id="k3" placeholder="WeatherAPI.com key" autocomplete="off"><button id="ks">Save and refresh</button></div>
 <div id="app"><div id="err">Finding your forecast…</div></div>
 </main>
 <script>
@@ -55,8 +57,9 @@ const MODELS=['ecmwf_ifs025','gfs_seamless','icon_seamless','gem_seamless','mete
 const ALL=MODELS.concat(['ecmwf_aifs025_single','cma_grapes_global','bom_access_global']);
 const VARS=['temperature_2m','apparent_temperature','relative_humidity_2m','precipitation','wind_speed_10m','weather_code'];
 const $=s=>document.querySelector(s);
-const HOME={lat:12.969871,lon:80.135271,name:'Pammal, Chennai'};
-let place=JSON.parse(localStorage.getItem('place3')||'null')||HOME;
+const DEF={lat:13.0827,lon:80.2707,name:'Chennai'};
+const getHome=()=>JSON.parse(localStorage.getItem('home')||'null');
+let place=JSON.parse(localStorage.getItem('place3')||'null')||getHome()||DEF;
 let unit=localStorage.getItem('unit')||'C',data=null;
 const avg=a=>a.reduce((x,y)=>x+y,0)/a.length;
 const sd=a=>{if(a.length<2)return 0;const m=avg(a);return Math.sqrt(avg(a.map(x=>(x-m)**2)))};
@@ -92,13 +95,36 @@ async function wttr(){
  j.weather.forEach(d=>d.hourly.forEach(h=>{const hh=String(Math.round(+h.time/100)).padStart(2,'0');
   m.set(`${d.date}T${hh}`,{t:+h.tempC,h:+h.humidity,w:+h.windspeedKmph,r:+h.precipMM/3})}));
  if(!m.size)throw 0;return m}
+const K=n=>localStorage.getItem('k_'+n)||'';
+async function accu(){
+ const key=K('accu');if(!key)throw 0;
+ const lk=place.lat.toFixed(3)+','+place.lon.toFixed(3),ca=JSON.parse(localStorage.getItem('accu_c')||'null');
+ if(ca&&ca.lk===lk&&Date.now()-ca.at<7200000)return new Map(ca.e);
+ let loc=localStorage.getItem('accu_l_'+lk);
+ if(!loc){const j=await(await fetch(`https://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=${key}&q=${lk}`,SIG())).json();loc=j.Key;if(!loc)throw 0;localStorage.setItem('accu_l_'+lk,loc)}
+ const a=await(await fetch(`https://dataservice.accuweather.com/forecasts/v1/hourly/12hour/${loc}?apikey=${key}&metric=true&details=true`,SIG())).json();
+ if(!Array.isArray(a))throw 0;
+ const m=new Map();a.forEach(x=>m.set(x.DateTime.slice(0,13),{t:x.Temperature.Value,h:x.RelativeHumidity,w:x.Wind.Speed.Value,r:(x.TotalLiquid&&x.TotalLiquid.Value)||0}));
+ localStorage.setItem('accu_c',JSON.stringify({lk,at:Date.now(),e:[...m]}));return m}
+async function owm(off){
+ const key=K('owm');if(!key)throw 0;
+ const j=await(await fetch(`https://api.openweathermap.org/data/2.5/forecast?lat=${place.lat}&lon=${place.lon}&units=metric&appid=${key}`,SIG())).json();
+ if(!j.list)throw 0;const m=new Map();
+ j.list.forEach(x=>m.set(new Date((x.dt+off)*1000).toISOString().slice(0,13),{t:x.main.temp,h:x.main.humidity,w:x.wind.speed*3.6,r:((x.rain&&x.rain['3h'])||0)/3}));
+ return m}
+async function wapi(){
+ const key=K('wapi');if(!key)throw 0;
+ const j=await(await fetch(`https://api.weatherapi.com/v1/forecast.json?key=${key}&q=${place.lat},${place.lon}&days=3&aqi=no&alerts=no`,SIG())).json();
+ if(!j.forecast)throw 0;const m=new Map();
+ j.forecast.forecastday.forEach(d=>d.hour.forEach(h=>m.set(h.time.slice(0,10)+'T'+h.time.slice(11,13),{t:h.temp_c,h:h.humidity,w:h.wind_kph,r:h.precip_mm})));
+ return m}
 async function load(){
  $('#app').innerHTML='<div id="err">Checking every source…</div>';
  const url=l=>`https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}&hourly=${VARS.join()}&models=${l.join()}&forecast_days=10&timezone=auto`;
  const om=async l=>{const r=await fetch(url(l));if(!r.ok)throw 0;return[await r.json(),l]};
  try{
   const[d,l]=await om(ALL).catch(()=>om(MODELS));
-  const ex=(await Promise.allSettled([metno(d.utc_offset_seconds),wttr()])).filter(r=>r.status==='fulfilled').map(r=>r.value);
+  const ex=(await Promise.allSettled([metno(d.utc_offset_seconds),wttr(),accu(),owm(d.utc_offset_seconds),wapi()])).filter(r=>r.status==='fulfilled').map(r=>r.value);
   data=process(d,ex,l);
   localStorage.setItem('cache',JSON.stringify({place,data,at:Date.now()}));
   render();
@@ -174,12 +200,19 @@ function render(note){
   <div class="card"><h2>Rain, next 24h</h2><b>${unit==='F'?(rain24/25.4).toFixed(2)+' in':rain24.toFixed(1)+' mm'}</b></div>
   <div class="card"><h2>Confidence</h2><b style="font-size:18px;margin-top:6px"><i class="conf" style="background:${cc}"></i>${cl}</b><span>±${(avg(hours.slice(cur,cur+48).map(h=>h.spread))).toFixed(1)}° spread</span></div>
  </div>
- <div class="foot">${note?note+'<br>':''}Average of ${models} forecast sources: ECMWF, GFS, ICON, GEM, Météo-France, UK Met Office, JMA, MET Norway, WWO and more.<br>Rain % = share of models forecasting rain.</div>`;
+ <div class="foot">${note?note+'<br>':''}Average of ${models} forecast sources: ECMWF, GFS, ICON, GEM, Météo-France, UK Met Office, JMA, MET Norway, WWO and more.<br>Rain % = share of sources forecasting rain.<br>Compare: <a target="_blank" rel="noopener" href="https://www.ventusky.com/?p=${place.lat};${place.lon};8&l=rain-3h">Ventusky</a> · <a target="_blank" rel="noopener" href="https://www.accuweather.com/en/search-locations?query=${place.lat},${place.lon}">AccuWeather</a> · <a target="_blank" rel="noopener" href="https://mausam.imd.gov.in/chennai/">IMD Chennai</a></div>`;
 }
 
+$('#cfg').onclick=()=>{const t=$('#set');t.hidden=!t.hidden;['accu','owm','wapi'].forEach((n,i)=>$('#k'+(i+1)).value=K(n))};
+$('#ks').onclick=()=>{['accu','owm','wapi'].forEach((n,i)=>localStorage.setItem('k_'+n,$('#k'+(i+1)).value.trim()));localStorage.removeItem('accu_c');$('#set').hidden=true;load()};
 $('#u').textContent='°'+unit;
 $('#u').onclick=()=>{unit=unit==='C'?'F':'C';localStorage.setItem('unit',unit);$('#u').textContent='°'+unit;data&&render()};
-$('#home').onclick=()=>{place=HOME;localStorage.setItem('place3',JSON.stringify(HOME));load()};
+$('#home').onclick=()=>{
+ let h=getHome();
+ if(!h){const v=prompt('Enter your home coordinates once (latitude, longitude). They stay on this phone only.');
+  const m=v&&v.match(/(-?\d+\.?\d*)\s*[, ]\s*(-?\d+\.?\d*)/);if(!m)return;
+  h={lat:+m[1],lon:+m[2],name:'Home'};localStorage.setItem('home',JSON.stringify(h));}
+ place=h;localStorage.setItem('place3',JSON.stringify(h));load()};
 $('#loc').onclick=()=>{
  if(!navigator.geolocation)return load();
  navigator.geolocation.getCurrentPosition(p=>{
